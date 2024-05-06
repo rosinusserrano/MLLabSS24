@@ -6,6 +6,7 @@ import numpy as np
 import scipy.linalg as la
 
 import matplotlib.pyplot as plt
+import matplotlib.cm as cm
 
 
 class PCA:
@@ -91,7 +92,7 @@ def gammaidx(X: np.ndarray, k: int):
 def lle(X: np.ndarray,
         m: int,
         tol: np.float_,
-        n_rule: Literal["eps_ball", "knn"],
+        n_rule: Literal["eps-ball", "knn"],
         k: int | None = None,
         epsilon: np.float_ | None = None):
     """
@@ -116,14 +117,16 @@ def lle(X: np.ndarray,
     embeddings as row vectors
     """
 
-    assert n_rule != "eps_ball" or (
+    assert n_rule != "eps-ball" or (
         epsilon is not None
-    ), "When using eps_ball method you have to provide the epsilon parameter"
+    ), "When using eps-ball method you have to provide the epsilon parameter"
     assert n_rule != "knn" or (
         k is not None
     ), "When using knn method you have to provide the k parameter"
 
     n = X.shape[0]
+
+    print("Computing neighborhood ...")
 
     # Compute all pairwise distances
     pairwise_distances = np.linalg.norm(X[None, :, :] - X[:, None, :], axis=-1)
@@ -151,6 +154,8 @@ def lle(X: np.ndarray,
     if len(neighborhood_idxs) != n:
         raise ValueError("Graph not connected")
 
+    print("Computing weights of neighborhood ...")
+
     # Initialize weight matrix
     W = np.zeros((n, n))
 
@@ -159,7 +164,8 @@ def lle(X: np.ndarray,
         neighborhood = X[neighborhood_idxs[i]]
 
         # Compute local covariance matrix
-        C = (X[i] - neighborhood) @ np.transpose(X[i] - neighborhood)
+        C = 1 / neighborhood_idxs[i].shape[0] * (
+            (X[i] - neighborhood) @ np.transpose(X[i] - neighborhood))
 
         # Compute inverse of regularized cov matrix, if fails increase tol
         try:
@@ -176,14 +182,18 @@ def lle(X: np.ndarray,
         # Set values in weight matrix
         W[i, neighborhood_idxs[i]] = w
 
+    print("Testing if graph is connected ...")
+
     # Check if resulting graph is connected
     tmp = W
-    for i in range(n):
+    for i in range(int(round(np.sqrt(n)))):
         tmp = (tmp + (tmp @ tmp.T)) / np.linalg.norm(tmp)
     if np.any(tmp == 0):
         raise ValueError(
             "The resulting neighborhood graph is not connected. Try another value for k or epsilon"
         )
+
+    print("Making eigen decomposition ...")
 
     # Compute M (the matrix of which we will get eigenvectors and -values)
     M = np.eye(n) - W - W.T + (W.T @ W)
@@ -204,10 +214,12 @@ def lle(X: np.ndarray,
         eigvals[0], 0
     ), f"The first eigenvalue isn't 0, it's {eigvals[0]}. All are\n{eigvals}"
 
+    print("Building embeddings from eigenvectors ...")
+
     # Extract the lower dimension embedded points z_1, ..., z_n in R^m
     Z = eigvecs.T[:, 1:m + 1]
 
-    return Z
+    return Z, W
 
 
 #### TESTS
@@ -250,21 +262,21 @@ def plot(Xt, Xp, n_rule):
 def test_lle():
 
     # ########### 2D Plane
-    # n = 500
+    n = 500
 
-    # Xt = 10. * np.random.rand(n, 2)
-    # X = np.append(Xt, 0.5 * np.random.randn(n, 8), 1)
+    Xt = 10. * np.random.rand(n, 2)
+    X = np.append(Xt, 0.5 * np.random.randn(n, 8), 1)
 
-    # # Rotate data randomly.
-    # X = np.dot(X, randrot(10).T)
+    # Rotate data randomly.
+    X = np.dot(X, randrot(10).T)
 
-    # Xp = lle(X, 2, n_rule='knn', k=30, tol=1e-3)
-    # plot(Xt, Xp, 'knn')
+    Xp = lle(X, 2, n_rule='knn', k=30, tol=1e-3)
+    plot(Xt, Xp, 'knn')
 
-    # Xp = lle(X, 2, n_rule='eps-ball', epsilon=5., tol=1e-3)
-    # plot(Xt, Xp, 'eps-ball')
+    Xp = lle(X, 2, n_rule='eps-ball', epsilon=5., tol=1e-3)
+    plot(Xt, Xp, 'eps-ball')
 
-    # lle(X, 2, n_rule='eps-ball', epsilon=0.5, tol=1e-3)
+    lle(X, 2, n_rule='eps-ball', epsilon=0.5, tol=1e-3)
 
     ########## 2 Blobs in 2D
     n = 400
@@ -289,11 +301,129 @@ def test_lle():
     lle(X, 2, n_rule='eps-ball', epsilon=0.5, tol=1e-3)
 
 
+def plot3dto2dlle(data3d: np.ndarray,
+                  data2d: np.ndarray,
+                  true2d: np.ndarray | None = None,
+                  color: np.ndarray | None = None,
+                  neighborhood_graph: list[np.ndarray] | None = None):
+    fig = plt.figure(figsize=(6, 18 if true2d else 12))
+
+    nrows = 3 if true2d else 2
+    color = color if color is not None else data3d[:, 0]
+
+    ax3d = fig.add_subplot(nrows, 1, 1, projection="3d")
+    ax3d.scatter(data3d[:, 0], data3d[:, 1], data3d[:, 2], c=color)
+
+    if neighborhood_graph is not None:
+        for edge in neighborhood_graph:
+            ax3d.plot(*edge, c="red")
+
+    ax2d = fig.add_subplot(nrows, 1, 2)
+    ax2d.scatter(data2d[:, 0], data2d[:, 1], c=color)
+
+    if true2d:
+        axtrue = fig.add_subplot(nrows, 1, 3)
+        axtrue.scatter(true2d[:, 0], true2d[:, 1], c=color)
+
+    plt.show()
+
+
+def plot2dto1dlle(data2d: np.ndarray,
+                  data1d: np.ndarray,
+                  true1d: np.ndarray | None = None,
+                  color: np.ndarray | None = None,
+                  neighborhood_graph: list[np.ndarray] | None = None,
+                  neighborhood_graph_alpha: list | None = None):
+    fig = plt.figure(figsize=(20 if true1d is not None else 12, 6))
+
+    ncols = 3 if true1d is not None else 2
+    color = color if color is not None else data2d[:, 0]
+
+    ax2d = fig.add_subplot(1, ncols, 1)
+    ax2d.scatter(data2d[:, 0], data2d[:, 1], c=color)
+
+    if neighborhood_graph is not None:
+        for edge, alpha in zip(neighborhood_graph, neighborhood_graph_alpha):
+            ax2d.plot(*edge, c="red" if alpha > 0 else "blue", alpha=0.3)
+
+    ax1d = fig.add_subplot(1, ncols, 2)
+    ax1d.scatter(data1d[:, 0], np.zeros_like(data1d[:, 0]), c=color)
+
+    if true1d is not None:
+        axtrue = fig.add_subplot(1, ncols, 3)
+        axtrue.scatter(true1d[:, 0], np.zeros_like(true1d[:, 0]), c=color)
+
+    plt.show()
+
+
+def assignment7():
+    "Plots for assignment 7"
+    fishbowl = np.load("../data/fishbowl_dense.npz")["X"].T
+    swissroll_color = np.load("../data/swissroll_data.npz")["col"]
+    swissroll = np.load("../data/swissroll_data.npz")["x"].T
+    flatroll = np.load("../data/flatroll_data.npz")["Xflat"].T
+    flatroll_true = np.load("../data/flatroll_data.npz")["true_embedding"].T
+
+    fishbowl2d, _ = lle(fishbowl, 2, 1e-3, "eps-ball", 20, 0.2)
+    plot3dto2dlle(fishbowl, fishbowl2d, None)
+
+    swissroll2d, _ = lle(swissroll, 2, 1e-3, "knn", 6, 4.7)
+    plot3dto2dlle(swissroll, swissroll2d, None, swissroll_color)
+
+    flatroll1d, _ = lle(flatroll, 1, 1e-3, "knn", 8, 1.27)
+    plot2dto1dlle(flatroll, flatroll1d, flatroll_true)
+
+
+def compute_neighborhood_graph(W: np.ndarray, X: np.ndarray):
+    "Return edges from neighborhood graph"
+    nz = np.nonzero(W)
+    edges_idx = list(map(lambda i: (nz[0][i], nz[1][i]),
+                         range(nz[0].shape[0])))
+    edges = []
+    weights = []
+    for e in edges_idx:
+        edges.append(np.array([X[e[0]], X[e[1]]]).T)
+        weights.append(W[e[0], e[1]])
+    return edges, weights
+
+
+def assignment8():
+    "Assignment 8"
+    flatroll = np.load("../data/flatroll_data.npz")["Xflat"].T
+    flatroll_true = np.load("../data/flatroll_data.npz")["true_embedding"].T
+
+    # Add noise with variance 0.2 and 1.8
+    flatroll_noisy_02 = flatroll + np.random.normal(0, np.sqrt(0.2),
+                                                    flatroll.shape)
+    flatroll_noisy_18 = flatroll + np.random.normal(0, np.sqrt(1.8),
+                                                    flatroll.shape)
+
+    for n in range(6, 15):
+        print(n)
+        flatroll1d, W = lle(flatroll_noisy_02, 1, 1e-3, "knn", n, None)
+        edges, weights = compute_neighborhood_graph(W, flatroll_noisy_02)
+        plot2dto1dlle(flatroll_noisy_02,
+                      flatroll1d,
+                      None,
+                      color=flatroll[:, 0],
+                      neighborhood_graph=edges,
+                      neighborhood_graph_alpha=weights)
+        # break
+
+    # flatroll1d = lle(flatroll_noisy_18, 1, 1e-3, "knn", 8, None)
+    # plot2dto1dlle(flatroll_noisy_18, flatroll1d, flatroll_true, color=flatroll[:, 0])
+
+
 if __name__ == "__main__":
     print("MAIN")
+    assignment8()
 
-    # data = np.array([[0, 0, 0], [0, 0, 1], [1, 0, 0], [0, 1, 1]])
-
-    # lle(data, 2, 0.1, "eps_ball", None, 1)
-
-    test_lle()
+    # data = np.meshgrid(np.arange(-2, 2), np.arange(-5, 5))
+    # data = np.array([
+    #     np.reshape(data[0], (data[0].size, )),
+    #     np.reshape(data[1], (data[1].size, ))
+    # ]).T
+    # embeds, W = lle(data, 1, 1e-3, "knn", 4, None)
+    # print(W.shape)
+    # edges = compute_neighborhood_graph(np.ones_like(W), data)
+    # plot2dto1dlle(data, embeds, None, None, edges)
