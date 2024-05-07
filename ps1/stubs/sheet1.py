@@ -1,7 +1,7 @@
 # pylint: disable=invalid-name, non-ascii-name
 "Sheet 1 of ML Lab Course (TU Berlin)"
 
-from typing import Literal
+from typing import Literal, Type
 import numpy as np
 import scipy.linalg as la
 
@@ -94,7 +94,8 @@ def lle(X: np.ndarray,
         tol: np.float_,
         n_rule: Literal["eps-ball", "knn"],
         k: int | None = None,
-        epsilon: np.float_ | None = None):
+        epsilon: np.float_ | None = None,
+        return_weights: bool = False):
     """
     Function to compute the lower dimensional embeddings
     of a high dimensional dataset using the "Locally Linear
@@ -124,6 +125,10 @@ def lle(X: np.ndarray,
         k is not None
     ), "When using knn method you have to provide the k parameter"
 
+    assert m > 0 and m < X.shape[-1], """
+        The embedding dimension must be bigger than 0 and smaller
+        than the dimensionality of the data!"""
+
     n = X.shape[0]
 
     print("Computing neighborhood ...")
@@ -152,7 +157,7 @@ def lle(X: np.ndarray,
             np.where(sample_idxs[1:] != sample_idxs[:-1])[0] + 1)
 
     if len(neighborhood_idxs) != n:
-        raise ValueError("Graph not connected")
+        raise ValueError(f"Graph not connected. len(neighborhood_idxs) == {len(neighborhood_idxs)}")
 
     print("Computing weights of neighborhood ...")
 
@@ -219,7 +224,10 @@ def lle(X: np.ndarray,
     # Extract the lower dimension embedded points z_1, ..., z_n in R^m
     Z = eigvecs.T[:, 1:m + 1]
 
-    return Z, W
+    if return_weights:
+        return Z, W
+
+    return Z
 
 
 #### TESTS
@@ -301,29 +309,23 @@ def test_lle():
     lle(X, 2, n_rule='eps-ball', epsilon=0.5, tol=1e-3)
 
 
-def plot3dto2dlle(data3d: np.ndarray,
-                  data2d: np.ndarray,
-                  true2d: np.ndarray | None = None,
-                  color: np.ndarray | None = None,
-                  neighborhood_graph: list[np.ndarray] | None = None):
-    fig = plt.figure(figsize=(6, 18 if true2d else 12))
+def plot_lle(data: np.ndarray,
+             lle_embeddings: np.ndarray,
+             color: np.ndarray | None = None,
+             neighborhood_graph: list[np.ndarray] | None = None):
+    fig = plt.figure(figsize=(18, 6))
 
-    nrows = 3 if true2d else 2
-    color = color if color is not None else data3d[:, 0]
+    color = color if color is not None else data[:, -1]
 
-    ax3d = fig.add_subplot(nrows, 1, 1, projection="3d")
-    ax3d.scatter(data3d[:, 0], data3d[:, 1], data3d[:, 2], c=color)
+    ax_data = fig.add_subplot(1, 2, 1, projection="3d")
+    ax_data.scatter(data[:, 0], data[:, 1], data[:, 2], c=color)
 
     if neighborhood_graph is not None:
         for edge in neighborhood_graph:
-            ax3d.plot(*edge, c="red")
+            ax_data.plot(*edge, c="red", a=0.3)
 
-    ax2d = fig.add_subplot(nrows, 1, 2)
-    ax2d.scatter(data2d[:, 0], data2d[:, 1], c=color)
-
-    if true2d:
-        axtrue = fig.add_subplot(nrows, 1, 3)
-        axtrue.scatter(true2d[:, 0], true2d[:, 1], c=color)
+    ax_embeds = fig.add_subplot(1, 2, 2)
+    ax_embeds.scatter(lle_embeddings[:, 0], lle_embeddings[:, 1], c=color)
 
     plt.show()
 
@@ -356,22 +358,53 @@ def plot2dto1dlle(data2d: np.ndarray,
     plt.show()
 
 
-def assignment7():
+def assignment7(dataset: Literal["fishbowl", "flatroll",
+                                 "swissroll"] = "flatroll"):
     "Plots for assignment 7"
-    fishbowl = np.load("../data/fishbowl_dense.npz")["X"].T
-    swissroll_color = np.load("../data/swissroll_data.npz")["col"]
-    swissroll = np.load("../data/swissroll_data.npz")["x"].T
-    flatroll = np.load("../data/flatroll_data.npz")["Xflat"].T
-    flatroll_true = np.load("../data/flatroll_data.npz")["true_embedding"].T
 
-    fishbowl2d, _ = lle(fishbowl, 2, 1e-3, "eps-ball", 20, 0.2)
-    plot3dto2dlle(fishbowl, fishbowl2d, None)
+    # Load dataset
+    if dataset == "fishbowl":
+        data = np.load("ps1/data/fishbowl_dense.npz")["X"].T
+        color = data[:, -1]
+    if dataset == "swissroll":
+        color = np.load("ps1/data/swissroll_data.npz")["col"]
+        data = np.load("ps1/data/swissroll_data.npz")["x"].T
+    if dataset == "flatroll":
+        data = np.load("ps1/data/flatroll_data.npz")["Xflat"].T
+        color = np.load("ps1/data/flatroll_data.npz")["true_embedding"].T
 
-    swissroll2d, _ = lle(swissroll, 2, 1e-3, "knn", 6, 4.7)
-    plot3dto2dlle(swissroll, swissroll2d, None, swissroll_color)
+    # Dict with optimal parameters
+    optimal_params = {
+        "flatroll": (1e-3, "knn", 8, 1.27),
+        "swissroll": (1e-4, "knn", 6, None),
+        "fishbowl": (1e-3, "eps-ball", None, 0.2),
+    }
 
-    flatroll1d, _ = lle(flatroll, 1, 1e-3, "knn", 8, 1.27)
-    plot2dto1dlle(flatroll, flatroll1d, flatroll_true)
+    # Boolean value to distinguish between 3d and 2d data
+    data_is_3d = data.shape[-1] == 3
+
+    # Create lower dimensional embeddings using lle
+    embeds = lle(data, data.shape[-1] - 1, *optimal_params[dataset])
+
+    # Create matplotlib figure to add scatter plots
+    fig = plt.figure(figsize=(12, 6))
+
+    # Add subplot for original data
+    ax_data = fig.add_subplot(1, 2, 1, projection="3d" if data_is_3d else None)
+
+    # Plot original data
+    ax_data.scatter(*data.T, c=color)
+
+    # Create subplot for lle embeddings
+    ax_embeds = fig.add_subplot(1, 2, 2)
+
+    # Plot lle embeddings
+    ax_embeds.scatter(embeds[:, 0],
+                      embeds[:, 1] if data_is_3d else np.zeros_like(embeds[:,
+                                                                           0]),
+                      c=color)
+
+    plt.show()
 
 
 def compute_neighborhood_graph(W: np.ndarray, X: np.ndarray):
@@ -389,33 +422,50 @@ def compute_neighborhood_graph(W: np.ndarray, X: np.ndarray):
 
 def assignment8():
     "Assignment 8"
-    flatroll = np.load("../data/flatroll_data.npz")["Xflat"].T
-    flatroll_true = np.load("../data/flatroll_data.npz")["true_embedding"].T
+    flatroll = np.load("ps1/data/flatroll_data.npz")["Xflat"].T
+    flatroll_true = np.load("ps1/data/flatroll_data.npz")["true_embedding"].T
 
     # Add noise with variance 0.2 and 1.8
     flatroll_noisy_02 = flatroll + np.random.normal(0, np.sqrt(0.2),
                                                     flatroll.shape)
     flatroll_noisy_18 = flatroll + np.random.normal(0, np.sqrt(1.8),
                                                     flatroll.shape)
+    
+    # func for plotting neighborhood graph and embedding
+    def plot_embedding_and_neighborhood_graph(data, k):
+        embeds, W = lle(data, 1, 1e-5, "knn", k, None, return_weights=True)
+        edges, weights = compute_neighborhood_graph(W, data)
+        fig = plt.figure(figsize=(12, 6))
 
-    for n in range(6, 15):
-        print(n)
-        flatroll1d, W = lle(flatroll_noisy_02, 1, 1e-3, "knn", n, None)
-        edges, weights = compute_neighborhood_graph(W, flatroll_noisy_02)
-        plot2dto1dlle(flatroll_noisy_02,
-                      flatroll1d,
-                      None,
-                      color=flatroll[:, 0],
-                      neighborhood_graph=edges,
-                      neighborhood_graph_alpha=weights)
-        # break
+        ncols = 2
+        color = flatroll_true
 
-    # flatroll1d = lle(flatroll_noisy_18, 1, 1e-3, "knn", 8, None)
-    # plot2dto1dlle(flatroll_noisy_18, flatroll1d, flatroll_true, color=flatroll[:, 0])
+        ax2d = fig.add_subplot(1, ncols, 1)
+        ax2d.scatter(data[:, 0], data[:, 1], c=color)
+
+        for edge, alpha in zip(edges, weights):
+            ax2d.plot(*edge, c="red" if alpha > 0 else "blue", alpha=0.3)
+
+        ax1d = fig.add_subplot(1, ncols, 2)
+        ax1d.scatter(embeds[:, 0], np.zeros_like(embeds[:, 0]), c=color)
+
+        plt.show()
+    
+    good_k_02 = 8
+    bad_k_02 = 30
+    good_k_18 = 6
+    bad_k_18 = 30
+    
+    for k in [good_k_02, bad_k_02]:
+        plot_embedding_and_neighborhood_graph(flatroll_noisy_02, k)
+    
+    for k in [good_k_18, bad_k_18]:
+        plot_embedding_and_neighborhood_graph(flatroll_noisy_18, k)
 
 
 if __name__ == "__main__":
     print("MAIN")
+
     assignment8()
 
     # data = np.meshgrid(np.arange(-2, 2), np.arange(-5, 5))
